@@ -1,0 +1,97 @@
+<script src="/html/cross-origin-embedder-policy/credentialless/resources/dispatcher.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const uuid = params.get('uuid');
+
+window.isBFCached = false;
+window.shouldSuspendFetch = false;
+
+function getPushedItems(key) {
+  return JSON.parse(localStorage.getItem(key) || '[]');
+}
+
+function pushItem(key, value) {
+  const array = getPushedItems(key);
+  array.push(value);
+  localStorage.setItem(key, JSON.stringify(array));
+};
+
+function recordEvent(eventName) {
+  pushItem(uuid + '.observedEvents', eventName);
+}
+
+// Records events fired on `window` and `document`, with names listed in
+// `eventNames`.
+// The recorded events are stored in localStorage rather than global variables
+// e.g. to catch events fired just before navigating out.
+function startRecordingEvents(eventNames) {
+  for (const eventName of eventNames) {
+    window.addEventListener(eventName, event => {
+      let result = eventName;
+      if (event.persisted) {
+        result += '.persisted';
+      }
+      if (eventName === 'visibilitychange') {
+        result += '.' + document.visibilityState;
+      }
+      recordEvent('window.' + result);
+    });
+    document.addEventListener(eventName, () => {
+      let result = eventName;
+      if (eventName === 'visibilitychange') {
+        result += '.' + document.visibilityState;
+      }
+      recordEvent('document.' + result);
+    });
+  }
+}
+
+function getRecordedEvents() {
+  return getPushedItems(uuid + '.observedEvents');
+}
+
+// Call on a page to be (or not to be) BFCached immediately before navigating
+// out, within the same task as navigating out.
+// Polling tasks is suspended after this call to avoid outgoing fetch requests
+// during navigation.
+// On back navigation, `window.isBFCached` will be true if the page is restored
+// from BFCache, and thus `assert_bfcached()` in `helper.sub.js` can be used.
+function prepareNavigation() {
+  window.shouldSuspendFetch = true;
+  window.addEventListener(
+    'pageshow',
+    () => {
+      window.isBFCached = true;
+      window.shouldSuspendFetch = false;
+    },
+    {once: true});
+}
+
+if (params.get('events')) {
+  startRecordingEvents(params.get('events').split(','));
+}
+
+window.loadCount = parseInt(localStorage.getItem(uuid + '.loadCount') || '0') + 1;
+localStorage.setItem(uuid + '.loadCount', loadCount);
+
+// Tasks are executed after a pageshow event is fired.
+let pageshowFired = false;
+window.addEventListener('pageshow', () => {
+  if (pageshowFired) {
+    return;
+  }
+  pageshowFired = true;
+
+  const executeOrders = async function() {
+    while (true) {
+      if (!window.shouldSuspendFetch) {
+        const task = await receive(uuid);
+        await eval(`(async () => {${task}})()`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  };
+
+  executeOrders();
+});
+</script>
